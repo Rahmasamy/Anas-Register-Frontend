@@ -4,6 +4,8 @@ export type CreateRegistrationPayload = {
   project?: string;
   center: string;
   location: string;
+  latitude: number;
+  longitude: number;
   landmark?: string;
   category: string;
   specialties: string[];

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, ArrowRight, BedDouble, BriefcaseBusiness, CarFront, Check, CircleHelp, Copy, Ellipsis, FileText, GraduationCap, MapPinned, Phone, Share2, ShieldCheck, Utensils, UsersRound,  type LucideIcon } from 'lucide-react';
 import { Modal } from '../../shared/Modal';
@@ -10,6 +11,12 @@ import { categories, centers, needsList, type RegistrationDraft } from './data';
 import { getApiErrorMessage } from '../../infrastructure/http/api-error';
 import { useCreateRegistration } from '../registrations/hooks/useCreateRegistration';
 import type { RegistrationConfirmation } from '../registrations/types/registration.types';
+import type { MapCoordinates } from './LocationMapPicker';
+
+const LocationMapPicker = dynamic(() => import('./LocationMapPicker'), {
+  ssr: false,
+  loading: () => <div className="activity-map-loading" role="status">جارٍ تحميل الخريطة...</div>,
+});
 
 const blank: RegistrationDraft = {
   name: '', phone: '', project: '', center: '', location: '', landmark: '', category: '', specialties: [], status: 'قائم طوال العام',
@@ -138,6 +145,9 @@ export function RegistrationPage() {
   const { mutateAsync: createRegistration, isPending } = useCreateRegistration();
   const [step, setStep] = useState(1);
   const [draft, setDraft] = useState<RegistrationDraft>(blank);
+  const [coordinates, setCoordinates] = useState<MapCoordinates | null>(null);
+  const [pendingCoordinates, setPendingCoordinates] = useState<MapCoordinates | null>(null);
+  const [mapOpen, setMapOpen] = useState(false);
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState('');
   const set = <K extends keyof RegistrationDraft>(key: K, value: RegistrationDraft[K]) => setDraft((current) => ({ ...current, [key]: value }));
@@ -146,7 +156,7 @@ export function RegistrationPage() {
     set(key, old.includes(value) ? old.filter((item) => item !== value) : [...old, value]);
   };
   const validateStep = () => {
-    if (step === 1 && (!draft.name.trim() || !/^01\d{9}$/.test(draft.phone.replace(/\s/g, '')) || !draft.center || !draft.location.trim())) return 'أكمل الاسم ورقم الموبايل والمركز والقرية أو الحي.';
+    if (step === 1 && (!draft.name.trim() || !/^01\d{9}$/.test(draft.phone.replace(/\s/g, '')) || !draft.center || !draft.location.trim() || !coordinates)) return 'أكمل الاسم ورقم الموبايل والمركز، واكتب وصف المكان وحدد موقع النشاط على الخريطة.';
     if (step === 2 && (!draft.category || (draft.category !== 'نشاط آخر' && !draft.specialties.length))) return 'اختر فئة النشاط ونوع النشاط الذي تقدمه.';
     if (step === 3 && !draft.needs.length) return 'اختر أهم احتياج واحد على الأقل أو «لا أحتاج دعمًا حاليًا».';
     return '';
@@ -155,11 +165,12 @@ export function RegistrationPage() {
   const back = () => { setError(''); setStep((current) => Math.max(1, current - 1)); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const submit = async () => {
     if (!consent) { setError('يرجى تأكيد صحة البيانات والموافقة على استخدامها.'); return; }
+    if (!coordinates) { setError('حدد موقع النشاط على الخريطة قبل الإرسال.'); setStep(1); return; }
     if (isPending) return;
 
     try {
       setError('');
-      const registration = await createRegistration({ ...draft, consent: true });
+      const registration = await createRegistration({ ...draft, ...coordinates, consent: true });
       sessionStorage.setItem('anas-last-entry', JSON.stringify(registration));
       router.push('/confirmation');
     } catch (submissionError) {
@@ -185,10 +196,25 @@ export function RegistrationPage() {
             <Field label="رقم الموبايل" required><input value={draft.phone} onChange={(event) => set('phone', event.target.value)} placeholder="01XXXXXXXXX" inputMode="tel" data-testid="input-phone" /></Field>
             <Field label="اسم الورشة أو المشروع — اختياري"><input value={draft.project} onChange={(e) => set('project', e.target.value)} placeholder="إن كان لنشاطك اسم" data-testid="input-project" /></Field>
             <Field label="المركز" required><select value={draft.center} onChange={(event) => set('center', event.target.value)} data-testid="select-center"><option value="">اختر المركز</option>{centers.map((center) => <option key={center}>{center}</option>)}</select></Field>
-            <Field label="القرية / الحي / العزبة" required><input value={draft.location} onChange={(e) => set('location', e.target.value)} placeholder="اكتب اسم المكان المتعارف عليه محليًا" data-testid="input-location" /></Field>
+            <Field label="وصف موقع النشاط (القرية / الحي / العزبة)" required><input value={draft.location} onChange={(e) => set('location', e.target.value)} placeholder="اكتب القرية أو الحي الذي يقع فيه النشاط" data-testid="input-location" /></Field>
+            <div className="field">
+              <span id="activity-map-label">موقع النشاط على الخريطة<b> *</b></span>
+              <button
+                className={`location-picker-trigger ${coordinates ? 'selected' : ''}`}
+                type="button"
+                aria-labelledby="activity-map-label"
+                aria-describedby="activity-location-note"
+                onClick={() => { setPendingCoordinates(coordinates); setMapOpen(true); }}
+                data-testid="button-pick-activity-location"
+              >
+                <MapPinned size={18} />
+                {coordinates ? 'تم تحديد الموقع، اضغط لتعديله' : 'اختر موقع النشاط على الخريطة'}
+              </button>
+              {coordinates && <small className="map-coordinates" dir="ltr">{coordinates.latitude.toFixed(6)}, {coordinates.longitude.toFixed(6)}</small>}
+            </div>
             <Field label="أقرب علامة معروفة — اختياري"><input value={draft.landmark} onChange={(e) => set('landmark', e.target.value)} placeholder="مثال: بجوار الجمعية الزراعية" data-testid="input-landmark" /></Field>
           </div>
-          <p className="field-note">اختر موقع النشاط الأساسي، وليس مكان السكن إن كان مختلفًا.</p>
+          <p className="field-note" id="activity-location-note">اختر موقع النشاط الأساسي، وليس مكان السكن إن كان مختلفًا.</p>
         </div>}
         {step === 2 && <div className="wizard-stack">
           <section className="form-panel"><h2>ماذا يقدم نشاطك؟</h2><p className="panel-intro">اختر فئة أساسية، ثم حدّد تخصصك.</p><Field label="فئة النشاط الأساسية" required><select value={draft.category} onChange={(e) => { set('category', e.target.value); set('specialties', []); }} data-testid="select-category"><option value="">اختر فئة النشاط</option>{categories.map((item) => <option key={item}>{item}</option>)}</select></Field></section>
@@ -205,7 +231,7 @@ export function RegistrationPage() {
         </div>}
         {step === 4 && <div className="wizard-stack">
           <div className="review-heading"><h2>راجع بياناتك قبل الإرسال</h2><p>تأكد من المعلومات التالية. يمكنك تعديل أي قسم قبل التسجيل.</p></div>
-          <ReviewCard title="بياناتك وموقع النشاط" onEdit={() => setStep(1)} rows={[['اسم صاحب النشاط', draft.name], ['رقم الموبايل', draft.phone], ['اسم المشروع', draft.project || 'لم يضف'], ['المركز', draft.center], ['القرية / الحي', draft.location], ['أقرب علامة', draft.landmark || 'لم يضف']]} />
+          <ReviewCard title="بياناتك وموقع النشاط" onEdit={() => setStep(1)} rows={[['اسم صاحب النشاط', draft.name], ['رقم الموبايل', draft.phone], ['اسم المشروع', draft.project || 'لم يضف'], ['المركز', draft.center], ['وصف موقع النشاط', draft.location], ['إحداثيات الموقع', coordinates ? `${coordinates.latitude.toFixed(6)}, ${coordinates.longitude.toFixed(6)}` : 'غير محدد'], ['أقرب علامة', draft.landmark || 'لم يضف']]} />
           <ReviewCard title="نشاطك" onEdit={() => setStep(2)} rows={[['الفئة الأساسية', draft.category], ['التخصص', draft.specialties.join('، ') || draft.project], ['حالة النشاط', draft.status], ['نشاط إضافي', draft.extra || 'لم يضف']]} />
           <ReviewCard title="احتياجاتك واختيار التواصل" onEdit={() => setStep(3)} rows={[['أهم الاحتياجات', draft.needs.join('، ')], ['الدعم السابق', draft.previousSupport], ['التواصل بشأن فرص مناسبة', draft.contactChoice]]} />
           <div className="consent-line"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} id="consent" data-testid="checkbox-consent" /><label htmlFor="consent">أؤكد أن البيانات التي أدخلتها صحيحة حسب علمي، وأوافق على استخدامها في الحصر وفق <button className="inline-link" onClick={() => window.dispatchEvent(new Event('open-privacy'))}>سياسة الخصوصية</button>.</label></div>
@@ -217,6 +243,12 @@ export function RegistrationPage() {
         <p className="wizard-disclaimer">{step === 4 ? 'التسجيل لا يعني اعتمادًا أو ترخيصًا، ولا يضمن الحصول على دعم أو فرص عمل.' : 'أكمل الحقول المطلوبة للمتابعة.'}</p>
       </section>
     </div>
+    {mapOpen && <Modal title="اختر موقع النشاط الأساسي" className="location-map-modal" onClose={() => setMapOpen(false)}>
+      <LocationMapPicker
+        initialPosition={pendingCoordinates}
+        onConfirm={(selected) => { setCoordinates(selected); setMapOpen(false); }}
+      />
+    </Modal>}
     <footer className="registration-footer">مؤسسة أنس للتنمية البيئية والمجتمعية <Link href="#privacy" onClick={(e) => { e.preventDefault(); window.dispatchEvent(new Event('open-privacy')); }}>الخصوصية</Link></footer>
   </main>;
 }
